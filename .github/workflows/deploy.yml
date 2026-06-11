@@ -32,17 +32,17 @@ jobs:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.SA_EMAIL }}
           project_id: ${{ env.PROJECT_ID }}
-          token_format: 'access_token' # Penting: Menghasilkan token untuk Docker
 
       # ==============================
-      # 2. DOCKER LOGIN (ANTI-GAGAL)
+      # 2. SETUP GCLOUD & DOCKER (NATIVE GCP WAY)
       # ==============================
-      - name: Docker Login to GAR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGION }}-docker.pkg.dev
-          username: oauth2accesstoken
-          password: ${{ steps.auth.outputs.access_token }}
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Docker Auth to Artifact Registry
+        # Perintah ini secara otomatis mengonfigurasi docker config agar 
+        # menggunakan kredensial dari step Google Auth di atas.
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
       # 1. AI SERVICE
       - name: Build and Push AI Image
