@@ -22,12 +22,15 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      # Menggunakan JSON Key dari GitHub Secrets (GCP_SA_KEY)
+      # ==============================
+      # 1. AUTHENTICATION (WIF - TANPA KEY JSON)
+      # ==============================
       - name: Google Auth
         id: auth
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.SA_EMAIL }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
