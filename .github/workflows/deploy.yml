@@ -98,7 +98,6 @@ jobs:
           image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
           region: ${{ env.REGION }}
           env_vars: |
-            PORT=8080
             APP_MODE=production
             DB_HOST=10.22.0.5
             DB_USER=root
