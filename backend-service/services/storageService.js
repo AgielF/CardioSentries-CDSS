@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { Storage } = require('@google-cloud/storage');
+const { createClient } = require('@supabase/supabase-js');
 
 const getMode = () => {
     const mode = (process.env.APP_MODE || 'dev').toLowerCase();
@@ -31,7 +31,6 @@ const devDeleteIfExists = async (filename) => {
 };
 
 const devGetDownloadUrl = (filename) => {
-    // Untuk dev: URL relative yang akan di-handle endpoint backend sendiri
     return `/api/doctor/records/pdf/download`;
 };
 
@@ -40,55 +39,62 @@ const devGetAbsolutePath = (filename) => {
     return path.join(dir, filename);
 };
 
-// --- PRODUCTION: Google Cloud Storage ---
-let gcsStorage = null;
-const getGcs = () => {
-    if (gcsStorage) return gcsStorage;
-    const projectId = process.env.GCP_PROJECT_ID;
-    const keyFile = process.env.GCP_KEY_FILE_PATH;
-    if (!projectId || !keyFile) {
-        throw new Error('GCP_PROJECT_ID dan GCP_KEY_FILE_PATH harus diisi untuk mode production.');
+// --- PRODUCTION: SUPABASE STORAGE ---
+let supabaseClient = null;
+const getSupabase = () => {
+    if (supabaseClient) return supabaseClient;
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_KEY;
+    if (!url || !key) {
+        throw new Error('SUPABASE_URL dan SUPABASE_KEY harus diisi untuk mode production.');
     }
-    gcsStorage = new Storage({
-        projectId,
-        keyFilename: path.resolve(keyFile),
-    });
-    return gcsStorage;
-};
-
-const getBucket = () => {
-    const bucketName = process.env.GCP_BUCKET_NAME;
-    if (!bucketName) throw new Error('GCP_BUCKET_NAME harus diisi untuk mode production.');
-    return getGcs().bucket(bucketName);
+    supabaseClient = createClient(url, key);
+    return supabaseClient;
 };
 
 const prodSavePdf = async (buffer, filename) => {
-    const bucketName = process.env.GCP_BUCKET_NAME;
-    if (!bucketName) throw new Error('GCP_BUCKET_NAME harus diisi untuk mode production.');
-    const file = getGcs().bucket(bucketName).file(filename);
-    await file.save(buffer, {
-        resumable: false,
-        contentType: 'application/pdf',
-        metadata: { cacheControl: 'no-cache' },
-    });
-    // Public URL langsung — tanpa token, tanpa signed
-    const publicUrl = `https://storage.googleapis.com/${bucketName}/${filename}`;
-    return { storagePath: publicUrl, mode: 'production' };
+    const bucketName = process.env.SUPABASE_BUCKET_NAME || 'rekam-medis';
+    const supabase = getSupabase();
+
+    // Upload ke Supabase (upsert: true agar file direplace jika dokter print ulang)
+    const { data, error } = await supabase.storage
+        .from(bucketName)
+        .upload(filename, buffer, {
+            contentType: 'application/pdf',
+            upsert: true,
+            cacheControl: '0' 
+        });
+
+    if (error) throw new Error(`Supabase Upload Error: ${error.message}`);
+
+    // Generate URL Publik langsung
+    const { data: publicUrlData } = supabase.storage
+        .from(bucketName)
+        .getPublicUrl(filename);
+
+    return { storagePath: publicUrlData.publicUrl, mode: 'production' };
 };
 
 const prodDeleteIfExists = async (filename) => {
-    const file = getBucket().file(filename);
-    try {
-        await file.delete();
-    } catch (err) {
-        if (err.code !== 404) throw err;
-    }
+    const bucketName = process.env.SUPABASE_BUCKET_NAME || 'rekam-medis';
+    const supabase = getSupabase();
+    
+    const { error } = await supabase.storage
+        .from(bucketName)
+        .remove([filename]);
+        
+    if (error) console.error(`[Supabase] Gagal hapus ${filename}:`, error.message);
 };
 
 const prodGetDownloadUrl = async (filename) => {
-    const bucketName = process.env.GCP_BUCKET_NAME;
-    if (!bucketName) throw new Error('GCP_BUCKET_NAME harus diisi untuk mode production.');
-    return `https://storage.googleapis.com/${bucketName}/${filename}`;
+    const bucketName = process.env.SUPABASE_BUCKET_NAME || 'rekam-medis';
+    const supabase = getSupabase();
+    
+    const { data } = supabase.storage
+        .from(bucketName)
+        .getPublicUrl(filename);
+        
+    return data.publicUrl;
 };
 
 // --- Public API ---
