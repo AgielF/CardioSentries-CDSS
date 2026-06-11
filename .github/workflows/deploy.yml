@@ -55,7 +55,7 @@ jobs:
           region: ${{ env.REGION }}
           flags: |
             --ingress=internal
-            --no-allow-unauthenticated
+            --allow-unauthenticated
     outputs:
       ai_url: ${{ steps.deploy-ai.outputs.url }}
 
