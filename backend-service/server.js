@@ -3,21 +3,35 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios'); // Untuk nembak ke Python
 const jwt = require('jsonwebtoken');
-const { Doctor, PatientRecord } = require('./models');
+const fs = require('fs');
+const path = require('path');
+const { Doctor, PatientRecord, PrintHistory } = require('./models');
 const swaggerUi = require('swagger-ui-express'); // Nanti untuk dokumentasi
+const { generatePatientReport } = require('./services/pdfService');
+const storageService = require('./services/storageService');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 // --- MIDDLEWARE (Module 11: Security) ---
+// Mendukung dua cara kirim token:
+// 1. Header "Authorization: Bearer <token>" (default axios/fetch)
+// 2. Query string "?token=<token>" (untuk window.open tab baru / link <a>)
 const verifyToken = (req, res, next) => {
-    const token = req.headers['authorization'];
-    if (!token) return res.status(403).json({ msg: "No token provided" });
-    
-    jwt.verify(token.split(" ")[1], process.env.JWT_SECRET, (err, decoded) => {
+    let raw = null;
+    const auth = req.headers['authorization'];
+    if (auth) {
+        raw = auth.startsWith('Bearer ') ? auth.slice(7) : auth;
+    } else if (req.query && req.query.token) {
+        raw = String(req.query.token);
+    }
+
+    if (!raw) return res.status(403).json({ msg: "No token provided" });
+
+    jwt.verify(raw, process.env.JWT_SECRET, (err, decoded) => {
         if (err) return res.status(401).json({ msg: "Unauthorized" });
-        req.user = decoded; // Simpan data user di request
+        req.user = decoded;
         next();
     });
 };
@@ -204,7 +218,140 @@ app.post('/api/public/predict', async (req, res) => {
     }
 });
 
+// --- PDF: Generate & Print Rekapan Pasien Dokter ---
+// Generate PDF (auto overwrite file lama + catat riwayat)
+app.get('/api/doctor/records/pdf', verifyToken, async (req, res) => {
+    if (req.user.role !== 'doctor') return res.status(403).json({ msg: "Doctor Only" });
+
+    try {
+        const records = await PatientRecord.findAll({
+            where: { doctor_nip: req.user.nip },
+            order: [['updatedAt', 'DESC']],
+        });
+        const doctor = await Doctor.findOne({ where: { nip: req.user.nip } });
+        const doctorInfo = doctor
+            ? { nip: doctor.nip, name: doctor.name }
+            : { nip: req.user.nip, name: req.user.name };
+
+        const safeNip = String(req.user.nip).replace(/[^a-zA-Z0-9_-]/g, '_');
+        const filename = `dokter_${safeNip}_patients.pdf`;
+
+        // 1. Generate PDF Buffer
+        const pdfBuffer = await generatePatientReport(records, doctorInfo);
+
+        // 2. Hapus file lama (best-effort) lalu simpan yang baru
+        await storageService.deleteIfExists(filename);
+        const saveResult = await storageService.savePdf(pdfBuffer, filename);
+
+        // 3. Catat / update riwayat (1 baris per dokter)
+        const now = new Date();
+        const [history] = await PrintHistory.findOrCreate({
+            where: { doctor_nip: req.user.nip },
+            defaults: {
+                doctor_nip: req.user.nip,
+                filename,
+                storage_path: saveResult.storagePath,
+                mode: storageService.getCurrentMode(),
+                last_printed_at: now,
+            },
+        });
+        // Update field supaya selalu merefleksikan print terbaru
+        await history.update({
+            filename,
+            storage_path: saveResult.storagePath,
+            mode: storageService.getCurrentMode(),
+            last_printed_at: now,
+        });
+
+        res.json({
+            msg: 'PDF berhasil dibuat',
+            mode: storageService.getCurrentMode(),
+            filename,
+            storagePath: saveResult.storagePath,
+            count: records.length,
+            lastPrintedAt: now,
+        });
+    } catch (err) {
+        console.error('[PDF] Gagal generate:', err);
+        res.status(500).json({ msg: 'Gagal membuat PDF', error: err.message });
+    }
+});
+
+// Ambil riwayat print terakhir (1 record) untuk dokter yang login
+app.get('/api/doctor/print-history', verifyToken, async (req, res) => {
+    if (req.user.role !== 'doctor') return res.status(403).json({ msg: "Doctor Only" });
+    try {
+        const history = await PrintHistory.findOne({
+            where: { doctor_nip: req.user.nip },
+        });
+        if (!history) return res.json({ history: null });
+        res.json({ history });
+    } catch (err) {
+        console.error('[History] Gagal ambil:', err);
+        res.status(500).json({ msg: 'Gagal mengambil riwayat' });
+    }
+});
+
+// Download PDF — SELALU return JSON dengan URL siap-pakai di browser
+// (dev: URL relatif ke /api/doctor/records/pdf/file + ?token=; production: public URL bucket GCS)
+app.get('/api/doctor/records/pdf/download', verifyToken, async (req, res) => {
+    if (req.user.role !== 'doctor') return res.status(403).json({ msg: "Doctor Only" });
+
+    try {
+        const mode = storageService.getCurrentMode();
+        const history = await PrintHistory.findOne({ where: { doctor_nip: req.user.nip } });
+        if (!history || !history.filename) {
+            return res.status(404).json({ msg: 'Belum ada riwayat print. Klik "Print PDF" dulu.' });
+        }
+        const filename = history.filename;
+
+        if (mode === 'production') {
+            const signedUrl = await storageService.getDownloadUrl(filename);
+            return res.json({ mode: 'production', downloadUrl: signedUrl, filename });
+        }
+
+        // Dev: kembalikan path ke endpoint yang me-serve file
+        return res.json({
+            mode: 'dev',
+            downloadUrl: `/api/doctor/records/pdf/file?f=${encodeURIComponent(filename)}`,
+            filename,
+        });
+    } catch (err) {
+        console.error('[PDF Download] Error:', err);
+        res.status(500).json({ msg: 'Gagal mendapatkan URL download', error: err.message });
+    }
+});
+
+// Serve file PDF biner langsung ke browser (khusus mode dev)
+app.get('/api/doctor/records/pdf/file', verifyToken, async (req, res) => {
+    if (req.user.role !== 'doctor') return res.status(403).json({ msg: "Doctor Only" });
+
+    const mode = storageService.getCurrentMode();
+    if (mode !== 'dev') {
+        return res.status(400).json({ msg: 'Endpoint ini hanya untuk mode dev.' });
+    }
+
+    const filename = req.query.f;
+    if (!filename) return res.status(400).json({ msg: 'Parameter ?f=<filename> wajib.' });
+
+    // Validasi: filename harus sesuai dengan history dokter (anti path traversal)
+    const history = await PrintHistory.findOne({ where: { doctor_nip: req.user.nip } });
+    if (!history || history.filename !== filename) {
+        return res.status(403).json({ msg: 'Akses ditolak: file bukan milik Anda.' });
+    }
+
+    const fullPath = storageService.getAbsolutePath(filename);
+    if (!fullPath || !fs.existsSync(fullPath)) {
+        return res.status(404).json({ msg: 'File PDF tidak ditemukan. Silakan klik "Print PDF" dulu.' });
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    fs.createReadStream(fullPath).pipe(res);
+});
+
 app.listen(process.env.PORT, () => {
     console.log(`🚀 Backend Manager running on port ${process.env.PORT}`);
     console.log(`🔗 Admin Configured: ${process.env.ADMIN_USERNAME}`);
+    console.log(`📦 App Mode: ${storageService.getCurrentMode()}`);
 });

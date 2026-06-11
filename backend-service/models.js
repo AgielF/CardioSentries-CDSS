@@ -38,13 +38,26 @@ const PatientRecord = sequelize.define('PatientRecord', {
     doctor_nip: { type: DataTypes.STRING }
 });
 
+// Model Riwayat Print PDF (1 baris per dokter, di-overwrite saat print ulang)
+const PrintHistory = sequelize.define('PrintHistory', {
+    doctor_nip: { type: DataTypes.STRING, allowNull: false, unique: true },
+    filename: { type: DataTypes.STRING, allowNull: false },
+    storage_path: { type: DataTypes.STRING, allowNull: true },
+    mode: { type: DataTypes.STRING, allowNull: false },
+    last_printed_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW }
+});
+
 // Relasi (Opsional tapi bagus): Record milik Dokter
 Doctor.hasMany(PatientRecord, { foreignKey: 'doctor_nip', sourceKey: 'nip' });
 PatientRecord.belongsTo(Doctor, { foreignKey: 'doctor_nip', targetKey: 'nip' });
+
+// PrintHistory berdiri sendiri — tidak ada FK ke tabel doctors agar
+// riwayat tetap bisa bertahan walau data dokter dihapus.
+// (Hubungan doctor_nip -> nip hanya konseptual, referential di level aplikasi.)
 
 // Sinkronisasi: Pakai { alter: true } agar kalau ada perubahan kolom, tabel di MySQL menyesuaikan
 sequelize.sync({ alter: true })
     .then(() => console.log("✅ MySQL Tables Synced!"))
     .catch(err => console.log("❌ Sync Error:", err));
 
-module.exports = { sequelize, Doctor, PatientRecord };
+module.exports = { sequelize, Doctor, PatientRecord, PrintHistory };

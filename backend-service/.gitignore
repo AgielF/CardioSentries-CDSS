@@ -1,1 +1,4 @@
 node_modules
+storage/
+gcp-service-account.json
+*.log
