@@ -53,7 +53,7 @@ const getSupabase = () => {
 };
 
 const prodSavePdf = async (buffer, filename) => {
-    const bucketName = process.env.SUPABASE_BUCKET_NAME || 'rekam-medis';
+    const bucketName = process.env.SUPABASE_BUCKET_NAME || 'cardiosentries';
     const supabase = getSupabase();
 
     // Upload ke Supabase (upsert: true agar file direplace jika dokter print ulang)
