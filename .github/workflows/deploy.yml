@@ -1,101 +1,86 @@
-name: Deploy CardioSentries to Cloud Run
+name: Continuous Integration & Deployment
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
 
 env:
   PROJECT_ID: project-cc3dda7e-8a0a-4231-aa7
   REGION: asia-southeast2
   GAR_REPO: cardio-repo
-  AI_IMAGE: cardio-ai
-  BACKEND_IMAGE: cardio-backend
-  FRONTEND_IMAGE: cardio-frontend
+  AI_SERVICE_NAME: cardio-ai
+  BACKEND_SERVICE_NAME: cardio-backend
+  FRONTEND_SERVICE_NAME: cardio-frontend
 
 jobs:
-  deploy:
-    name: Build and Deploy to GCP
+  deploy-ai:
+    name: 1. Build & Deploy AI Service
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: 'read'
-      id-token: 'write'
-
     steps:
-      # ==============================
-      # 0. CHECKOUT
-      # ==============================
-      - name: Checkout Source Code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      # ==============================
-      # 1. AUTHENTICATION (WIF)
-      # ==============================
       - name: Google Auth
         id: auth
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.SA_EMAIL }}
-          project_id: ${{ env.PROJECT_ID }}
-          token_format: 'access_token'
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      # ==============================
-      # 2. DOCKER LOGIN (ANTI-GAGAL)
-      # ==============================
-      - name: Docker Login to GAR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGION }}-docker.pkg.dev
-          username: oauth2accesstoken
-          password: ${{ steps.auth.outputs.access_token }}
+      - name: Configure Docker for GAR
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
-      # ==============================
-      # 3. BUILD & DEPLOY AI SERVICE
-      # ==============================
       - name: Build and Push AI Image
         run: |
-          docker build \
-            -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.AI_IMAGE }}:${{ github.sha }} \
-            ./ai-service
+          docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.AI_SERVICE_NAME }}:${{ github.sha }} ./ai-service
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.AI_SERVICE_NAME }}:${{ github.sha }}
 
-          docker push \
-            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.AI_IMAGE }}:${{ github.sha }}
-
-      - name: Deploy AI to Cloud Run
+      - name: Deploy AI to Cloud Run (Strictly Private)
         id: deploy-ai
         uses: google-github-actions/deploy-cloudrun@v2
         with:
-          service: cardio-ai
-          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.AI_IMAGE }}:${{ github.sha }}
+          service: ${{ env.AI_SERVICE_NAME }}
+          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.AI_SERVICE_NAME }}:${{ github.sha }}
           region: ${{ env.REGION }}
           flags: |
-            --network=cardio-vpc
-            --subnet=cardio-subnet
-            --vpc-egress=all-traffic
-            --allow-unauthenticated
+            --ingress=internal
+            --no-allow-unauthenticated
+    outputs:
+      ai_url: ${{ steps.deploy-ai.outputs.url }}
 
-      # ==============================
-      # 4. BUILD & DEPLOY BACKEND
-      # ==============================
+  deploy-backend:
+    name: 2. Build & Deploy Backend
+    needs: deploy-ai
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Google Auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for GAR
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
       - name: Build and Push Backend Image
         run: |
-          docker build \
-            -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }} \
-            ./backend-service
-
-          docker push \
-            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.BACKEND_SERVICE_NAME }}:${{ github.sha }} ./backend-manager
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.BACKEND_SERVICE_NAME }}:${{ github.sha }}
 
       - name: Deploy Backend to Cloud Run
         id: deploy-backend
         uses: google-github-actions/deploy-cloudrun@v2
         with:
-          service: cardio-backend
-          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          service: ${{ env.BACKEND_SERVICE_NAME }}
+          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.BACKEND_SERVICE_NAME }}:${{ github.sha }}
           region: ${{ env.REGION }}
           env_vars: |
             APP_MODE=production
@@ -109,30 +94,47 @@ jobs:
             SUPABASE_URL=${{ secrets.SUPABASE_URL }}
             SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}
             SUPABASE_BUCKET_NAME=Ag735804@@__
-            AI_SERVICE_URL=${{ steps.deploy-ai.outputs.url }}/predict
+            AI_SERVICE_URL=${{ needs.deploy-ai.outputs.ai_url }}/predict
           flags: |
             --network=cardio-vpc
             --subnet=cardio-subnet
-            --vpc-egress=private-ranges-only
+            --vpc-egress=all-traffic
             --allow-unauthenticated
+    outputs:
+      backend_url: ${{ steps.deploy-backend.outputs.url }}
 
-      # ==============================
-      # 5. BUILD & DEPLOY FRONTEND
-      # ==============================
+  deploy-frontend:
+    name: 3. Build & Deploy Frontend Client
+    needs: deploy-backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Google Auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for GAR
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
       - name: Build and Push Frontend Image
         run: |
           docker build \
-            --build-arg VITE_API_BASE_URL=${{ steps.deploy-backend.outputs.url }} \
-            -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }} \
+            --build-arg VITE_API_BASE_URL=${{ needs.deploy-backend.outputs.backend_url }} \
+            -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.FRONTEND_SERVICE_NAME }}:${{ github.sha }} \
             ./frontend-client
-
-          docker push \
-            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.FRONTEND_SERVICE_NAME }}:${{ github.sha }}
 
       - name: Deploy Frontend to Cloud Run
         uses: google-github-actions/deploy-cloudrun@v2
         with:
-          service: cardio-frontend
-          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+          service: ${{ env.FRONTEND_SERVICE_NAME }}
+          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.FRONTEND_SERVICE_NAME }}:${{ github.sha }}
           region: ${{ env.REGION }}
-          flags: --port=80 --allow-unauthenticated
+          flags: |
+            --allow-unauthenticated
