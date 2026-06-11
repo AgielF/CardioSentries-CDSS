@@ -111,7 +111,7 @@ jobs:
             ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}
             SUPABASE_URL=${{ secrets.SUPABASE_URL }}
             SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}
-            SUPABASE_BUCKET_NAME=Ag735804@@__
+            SUPABASE_BUCKET_NAME=rekam-medis
             AI_SERVICE_URL=${{ needs.deploy-ai.outputs.ai_url }}/predict
           flags: |
             --network=cardio-vpc
