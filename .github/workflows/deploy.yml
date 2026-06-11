@@ -32,10 +32,7 @@ jobs:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.SA_EMAIL }}
           project_id: ${{ env.PROJECT_ID }}
-          token_format: 'access_token' # Penting untuk login Docker
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+          token_format: 'access_token' # Penting: Menghasilkan token untuk Docker
 
       # ==============================
       # 2. DOCKER LOGIN (ANTI-GAGAL)
