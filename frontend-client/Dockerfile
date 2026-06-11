@@ -20,6 +20,9 @@ FROM nginx:alpine
 # Menyalin berkas hasil kompilasi statis dari Stage 1 ke direktori Nginx
 COPY --from=builder /app/dist /usr/share/nginx/html
 
+# TAMBAHAN: Menyalin konfigurasi custom Nginx untuk SPA Routing (Cegah 404 Not Found)
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
 # Port 80 disesuaikan dengan bendera --port=80 pada skrip deploy Anda
 EXPOSE 80
 
