@@ -1,31 +1,39 @@
-name: Continuous Integration & Deployment
+name: Deploy CardioSentries to Cloud Run
 
 on:
   push:
-    branches:
-      - main
+    branches: ["main"]
 
 env:
   PROJECT_ID: project-cc3dda7e-8a0a-4231-aa7
   REGION: asia-southeast2
   GAR_REPO: cardio-repo
-  AI_SERVICE_NAME: cardio-ai
-  BACKEND_SERVICE_NAME: cardio-backend
-  FRONTEND_SERVICE_NAME: cardio-frontend
+  AI_IMAGE: cardio-ai
+  BACKEND_IMAGE: cardio-backend
+  FRONTEND_IMAGE: cardio-frontend
 
 jobs:
+  # ==========================================
+  # JOB 1: BUILD & DEPLOY AI SERVICE (PRIVATE)
+  # ==========================================
   deploy-ai:
     name: 1. Build & Deploy AI Service
     runs-on: ubuntu-latest
+    
+    # Wajib untuk autentikasi WIF
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
     steps:
-      - name: Checkout Code
+      - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Google Auth
-        id: auth
+      - name: Google Auth (WIF)
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.SA_EMAIL }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -35,15 +43,15 @@ jobs:
 
       - name: Build and Push AI Image
         run: |
-          docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.AI_SERVICE_NAME }}:${{ github.sha }} ./ai-service
-          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.AI_SERVICE_NAME }}:${{ github.sha }}
+          docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.AI_IMAGE }}:${{ github.sha }} ./ai-service
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.AI_IMAGE }}:${{ github.sha }}
 
-      - name: Deploy AI to Cloud Run (Strictly Private)
+      - name: Deploy AI to Cloud Run
         id: deploy-ai
         uses: google-github-actions/deploy-cloudrun@v2
         with:
-          service: ${{ env.AI_SERVICE_NAME }}
-          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.AI_SERVICE_NAME }}:${{ github.sha }}
+          service: ${{ env.AI_IMAGE }}
+          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.AI_IMAGE }}:${{ github.sha }}
           region: ${{ env.REGION }}
           flags: |
             --ingress=internal
@@ -51,18 +59,28 @@ jobs:
     outputs:
       ai_url: ${{ steps.deploy-ai.outputs.url }}
 
+  # ==========================================
+  # JOB 2: BUILD & DEPLOY BACKEND (NAT + VPC)
+  # ==========================================
   deploy-backend:
     name: 2. Build & Deploy Backend
     needs: deploy-ai
     runs-on: ubuntu-latest
+    
+    # Wajib untuk autentikasi WIF
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
     steps:
-      - name: Checkout Code
+      - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Google Auth
+      - name: Google Auth (WIF)
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.SA_EMAIL }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -72,15 +90,15 @@ jobs:
 
       - name: Build and Push Backend Image
         run: |
-          docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.BACKEND_SERVICE_NAME }}:${{ github.sha }} ./backend-manager
-          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.BACKEND_SERVICE_NAME }}:${{ github.sha }}
+          docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }} ./backend-manager
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
 
       - name: Deploy Backend to Cloud Run
         id: deploy-backend
         uses: google-github-actions/deploy-cloudrun@v2
         with:
-          service: ${{ env.BACKEND_SERVICE_NAME }}
-          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.BACKEND_SERVICE_NAME }}:${{ github.sha }}
+          service: ${{ env.BACKEND_IMAGE }}
+          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
           region: ${{ env.REGION }}
           env_vars: |
             APP_MODE=production
@@ -103,18 +121,28 @@ jobs:
     outputs:
       backend_url: ${{ steps.deploy-backend.outputs.url }}
 
+  # ==========================================
+  # JOB 3: BUILD & DEPLOY FRONTEND
+  # ==========================================
   deploy-frontend:
     name: 3. Build & Deploy Frontend Client
     needs: deploy-backend
     runs-on: ubuntu-latest
+    
+    # Wajib untuk autentikasi WIF
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
     steps:
-      - name: Checkout Code
+      - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Google Auth
+      - name: Google Auth (WIF)
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.SA_EMAIL }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -126,15 +154,15 @@ jobs:
         run: |
           docker build \
             --build-arg VITE_API_BASE_URL=${{ needs.deploy-backend.outputs.backend_url }} \
-            -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.FRONTEND_SERVICE_NAME }}:${{ github.sha }} \
+            -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }} \
             ./frontend-client
-          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.FRONTEND_SERVICE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
 
       - name: Deploy Frontend to Cloud Run
         uses: google-github-actions/deploy-cloudrun@v2
         with:
-          service: ${{ env.FRONTEND_SERVICE_NAME }}
-          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.FRONTEND_SERVICE_NAME }}:${{ github.sha }}
+          service: ${{ env.FRONTEND_IMAGE }}
+          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
           region: ${{ env.REGION }}
           flags: |
             --allow-unauthenticated
