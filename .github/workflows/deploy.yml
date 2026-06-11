@@ -114,9 +114,10 @@ jobs:
             SUPABASE_BUCKET_NAME=rekam-medis
             AI_SERVICE_URL=${{ needs.deploy-ai.outputs.ai_url }}/predict
           flags: |
+            --region=${{ env.REGION }}
             --network=cardio-vpc
             --subnet=cardio-subnet
-            --vpc-egress=all-traffic
+            --vpc-egress=private-ranges-only
             --allow-unauthenticated
     outputs:
       backend_url: ${{ steps.deploy-backend.outputs.url }}
