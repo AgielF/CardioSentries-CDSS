@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
 
       # ==============================
-      # 1. AUTHENTICATION (WIF - TANPA KEY JSON)
+      # 1. AUTHENTICATION (WIF)
       # ==============================
       - name: Google Auth
         id: auth
@@ -31,12 +31,14 @@ jobs:
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.SA_EMAIL }}
+          project_id: ${{ env.PROJECT_ID }} # Ditambahkan untuk stabilitas
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
+      # Ditambahkan flag --project agar Docker pasti auth ke project yang benar
       - name: Docker Auth to Artifact Registry
-        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --project=${{ env.PROJECT_ID }} --quiet
 
       # 1. AI SERVICE
       - name: Build and Push AI Image
