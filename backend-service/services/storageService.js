@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
+const ws = require('ws'); // <-- Integrasi package ws ditambahkan di sini
 
 const getMode = () => {
     const mode = (process.env.APP_MODE || 'dev').toLowerCase();
@@ -48,7 +49,17 @@ const getSupabase = () => {
     if (!url || !key) {
         throw new Error('SUPABASE_URL dan SUPABASE_KEY harus diisi untuk mode production.');
     }
-    supabaseClient = createClient(url, key);
+    
+    // <-- Integrasi konfigurasi transport ws dan mematikan persistSession
+    supabaseClient = createClient(url, key, {
+        auth: {
+            persistSession: false
+        },
+        realtime: {
+            transport: ws
+        }
+    });
+    
     return supabaseClient;
 };
 
