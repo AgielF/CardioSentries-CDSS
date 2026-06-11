@@ -113,7 +113,7 @@ jobs:
           flags: |
             --network=cardio-vpc
             --subnet=cardio-subnet
-            --vpc-egress=all-traffic
+            --vpc-egress=private-ranges-only
             --allow-unauthenticated
 
       # ==============================
